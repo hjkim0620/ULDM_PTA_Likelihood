@@ -1,0 +1,17 @@
+# axes.titlesize : 24
+# lines.linewidth : 3
+# lines.markersize : 10
+
+axes.labelsize : 20
+xtick.labelsize : 20
+xtick.direction : in
+
+ytick.labelsize : 20
+ytick.direction : in
+
+legend.fontsize: 15
+
+
+text.usetex: True
+
+legend.frameon : False
