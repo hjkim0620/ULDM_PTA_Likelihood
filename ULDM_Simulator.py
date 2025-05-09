@@ -3,6 +3,7 @@ import scipy
 import timeit
 import pyfftw
 import numpy as np 
+import matplotlib.pyplot as plt
 
 from scipy.fft import fftfreq, fftn, ifftn
 from matplotlib import animation
@@ -11,7 +12,7 @@ from tqdm.notebook import tqdm
 from scipy.interpolate import RegularGridInterpolator, interpn
 
 class ULDM_Simulator():
-    def __init__(self, dist='Iso_Gaussian', L=5, N=64, kJ=1e-1):
+    def __init__(self, dist='Iso_Gaussian', L=5, N=64, kJ=1e-3):
         '''
         dist(str)       : Distribution type
         L   (scalar)    : Length of the box
@@ -34,7 +35,7 @@ class ULDM_Simulator():
 
         self.N = N 
         self.L = L
-        self.dx = L/N
+        self.dx = L / N
 
         # Set up the spatial grid
         self.coordinate = (
@@ -60,7 +61,7 @@ class ULDM_Simulator():
 
         # 1 / k^2
         self.K2 = self.KX**2 + self.KY**2 + self.KZ**2
-        self.invK2 = np.divide(1, self.K2, out=np.zeros((self.N, self.N, self.N)), where=(self.K2 !=0))
+        self.invK2 = np.divide(1, self.K2, out=np.zeros((self.N, self.N, self.N)), where=(self.K2 != 0))
     
     def set_steps(self):
         self.T = self.L**2 / np.pi
@@ -74,20 +75,20 @@ class ULDM_Simulator():
         dist (str): Distribution type
         '''
         if dist == 'Iso_Gaussian':
-            return lambda k: (2*np.pi)**1.5 * np.exp(-k**2 / 2)
+            return lambda k: (2 * np.pi)**1.5 * np.exp(-k**2 / 2)
         
     def set_initial_wavefunction(self):
         self.farr = self.f(np.sqrt(self.KX**2 + self.KY**2 + self.KZ**2))
 
-        PSI = np.random.rayleigh(1)
+        PSI = np.random.rayleigh(size=self.farr.shape).astype('complex128')
         PSI *= 1 / self.L**1.5
         PSI *= np.exp(2j * np.pi * np.random.rand(self.N, self.N, self.N))
         PSI *= np.sqrt(self.farr / 2)
         
         self.psi = ifftn(PSI, norm='forward')                       
-        self.rhob = self.N**(-3) * np.sum(np.abs(self.psi)**2)    # average density
+        self.rhob = np.mean(np.abs(self.psi)**2)    # average density
 
-        self.Phi_fourier = fftn(-(self.kJ**4 / 4) * (np.abs(self.psi)**2 - self.rhob)) * self.invK2
+        self.Phi_fourier = -(self.kJ**4 / 4) * fftn((np.abs(self.psi)**2 - self.rhob)) * self.invK2
         self.Phi = np.real(ifftn(self.Phi_fourier))
 
     def evolve(self):
@@ -112,3 +113,150 @@ class ULDM_Simulator():
             for i, _ in enumerate(tqdm(self.time)):
                 self.rho[i] = (np.abs(self.psi)**2)[0,0,0]
                 self.evolve()
+
+class ULDM_FreeParticle(ULDM_Simulator):
+    def __init__(self, dist='Iso_Gaussian', L=5, N=64, kJ=1e-3):
+        super().__init__(dist=dist, L=L, N=N, kJ=kJ)
+        self.set_initial_kinematics()
+
+    def set_initial_kinematics(self):
+        self.grid = np.linspace(-self.L/2, self.L/2, self.N)
+
+        self.ax = np.real(ifftn(-1j * self.KX * self.Phi_fourier))
+        self.ay = np.real(ifftn(-1j * self.KY * self.Phi_fourier))
+        self.az = np.real(ifftn(-1j * self.KZ * self.Phi_fourier))
+
+        self.pos = np.array([0, 0, 0])
+        self.vel = np.array([0, 0, 0])
+        self.acc = np.array([interpn(self.coordinate, self.ax, self.pos)[0],
+                             interpn(self.coordinate, self.ay, self.pos)[0],
+                             interpn(self.coordinate, self.az, self.pos)[0]])
+        
+    # THIS OVERRIDES evolve METHOD IN PARENT CLASS
+    def evolve(self):
+        '''
+        Evolve field according to kick-drift-kick scheme
+        Evolve particle according to drift-kick-drift (leapfrog)
+        '''
+        
+        # Initial kick - drift sequence
+        self.psi *= np.exp(-0.5j * self.Phi * self.dt)
+        self.psi = fftn(self.psi)
+        self.psi *= np.exp(-0.5j * self.K2 * self.dt)   
+        self.psi = ifftn(self.psi)
+
+        # Update Phi and acceleration
+        self.rhob = self.N**(-3) * np.sum(np.abs(self.psi)**2)
+        
+        self.Phi_fourier = fftn(-(self.kJ**4 / 4) * (np.abs(self.psi)**2 - self.rhob)) * self.invK2
+        self.Phi = np.real(ifftn(self.Phi_fourier))
+        
+        self.ax = np.real(ifftn(-1j * self.KX * self.Phi_fourier))
+        self.ay = np.real(ifftn(-1j * self.KY * self.Phi_fourier))
+        self.az = np.real(ifftn(-1j * self.KZ * self.Phi_fourier))
+        
+        self.psi *= np.exp(-0.5j * self.Phi * self.dt)
+
+        # Free particle evolution
+        self.pos = self.pos + 0.5 * self.vel * self.dt
+        self.acc = np.array([interpn(self.coordinate, self.ax, self.pos)[0],
+                             interpn(self.coordinate, self.ay, self.pos)[0],
+                             interpn(self.coordinate, self.az, self.pos)[0]])
+        self.vel = self.vel + self.acc * self.dt
+        self.pos = self.pos + 0.5 * self.vel * self.dt
+
+    # THIS OVERRIDES solve METHOD IN PARENT CLASS
+    def solve(self, save=True, progress=True):
+        if progress:
+            ite = tqdm(self.time)
+        else:
+            ite = self.time
+
+        if save == True:
+            self.rho = np.zeros(len(self.time))
+            self.pos_arr = np.zeros((len(self.time), 3))
+            self.vel_arr = np.zeros((len(self.time), 3))
+            self.acc_arr = np.zeros((len(self.time), 3))
+
+            for i, _ in enumerate(ite):
+                self.rho[i] = (np.abs(self.psi)**2)[0,0,0]
+                self.pos_arr[i] = self.pos
+                self.vel_arr[i] = self.vel
+                self.acc_arr[i] = self.acc
+                self.evolve()
+
+class Plotting:
+    '''
+    TODO 
+    1. Complete implementation of spectrum plotting method
+    2. 
+    '''
+    def __init__(self, sim: ULDM_Simulator):
+        self.sim = sim
+    
+    def rho_plot(self, thinning=4, savefig_loc=None):
+        '''
+        Plot rho and its distribution
+        Compare with exponential distribution
+
+        Input
+            thinning    (scalar)    thin the array of rho
+            savefig_loc (str)       fig save location
+        '''
+        fig, ax = plt.subplots(ncols=2, figsize=(9,4))
+
+        ax[0].plot(self.sim.time, self.sim.rho)
+        ax[0].set_xlabel(r'$t/\tau$');
+        ax[0].set_ylabel(r'$\rho/\bar\rho$');
+
+        ax[1].hist(self.sim.rho[::thinning],
+                   density=True,
+                   bins=20,
+                   alpha=0.5)
+
+        rho_arr = np.arange(0,10,0.1)
+        ax[1].plot(rho_arr, np.exp(-rho_arr),
+                   linewidth=3,
+                   alpha=0.8,
+                   label=r'$(1/\bar\rho)\exp(-\rho/\bar\rho)$')
+
+        ax[1].set_xlim(0, 6)
+        ax[1].set_ylim(1e-2, 3)
+        ax[1].set_yscale('log')
+
+        ax[1].set_xlabel(r'$\rho/\bar\rho$');
+        ax[1].set_ylabel(r'$p(\rho |\bar\rho)$');
+        ax[1].legend()
+
+        fig.tight_layout()
+        if savefig_loc:
+            fig.savefig(savefig_loc)
+
+        return fig
+    
+    # def PS_plot(self, 
+    #             window=[True,False],
+    #             each=[False,False],
+    #             subtracted=False,
+    #             savefig_loc=None):
+    #     '''
+    #     Plot Power Spectrum and
+    #     Compare with analytic result
+    #     '''
+        
+    #     wd = np.sin(np.pi * self.time / self.T)**8 * (128/35)
+    #     wd = wd[:, None]
+        
+    #     if window[0]:    
+    #         pos_wd = self.sim.pos_arr * wd
+    #     if window[1]:
+    #         acc_wd = self.sim.acc_arr * wd
+
+
+    #     fig, ax = plt.subplots(ncols=2, figsize=(9,4))
+
+    #     fig.tight_layout()
+    #     if savefig_loc:
+    #         fig.savefig(savefig_loc)
+
+    #     return fig
