@@ -17,7 +17,7 @@ class ULDM_Simulator():
         dist(str)       : Distribution type
         L   (scalar)    : Length of the box
         N   (scalar)    : Number of grid points in each dimension
-        kJ  (scalar)    : Jeans wavelength = 2 (pi G rho)^(1/4) * m^1/2
+        kJ  (scalar)    : Dimless Jeans wavelength = 2 (pi G rho)^(1/4) * m^1/2 / (m sigma)
         '''
         self.kJ = kJ
 
@@ -184,79 +184,3 @@ class ULDM_FreeParticle(ULDM_Simulator):
                 self.vel_arr[i] = self.vel
                 self.acc_arr[i] = self.acc
                 self.evolve()
-
-class Plotting:
-    '''
-    TODO 
-    1. Complete implementation of spectrum plotting method
-    2. 
-    '''
-    def __init__(self, sim: ULDM_Simulator):
-        self.sim = sim
-    
-    def rho_plot(self, thinning=4, savefig_loc=None):
-        '''
-        Plot rho and its distribution
-        Compare with exponential distribution
-
-        Input
-            thinning    (scalar)    thin the array of rho
-            savefig_loc (str)       fig save location
-        '''
-        fig, ax = plt.subplots(ncols=2, figsize=(9,4))
-
-        ax[0].plot(self.sim.time, self.sim.rho)
-        ax[0].set_xlabel(r'$t/\tau$');
-        ax[0].set_ylabel(r'$\rho/\bar\rho$');
-
-        ax[1].hist(self.sim.rho[::thinning],
-                   density=True,
-                   bins=20,
-                   alpha=0.5)
-
-        rho_arr = np.arange(0,10,0.1)
-        ax[1].plot(rho_arr, np.exp(-rho_arr),
-                   linewidth=3,
-                   alpha=0.8,
-                   label=r'$(1/\bar\rho)\exp(-\rho/\bar\rho)$')
-
-        ax[1].set_xlim(0, 6)
-        ax[1].set_ylim(1e-2, 3)
-        ax[1].set_yscale('log')
-
-        ax[1].set_xlabel(r'$\rho/\bar\rho$');
-        ax[1].set_ylabel(r'$p(\rho |\bar\rho)$');
-        ax[1].legend()
-
-        fig.tight_layout()
-        if savefig_loc:
-            fig.savefig(savefig_loc)
-
-        return fig
-    
-    # def PS_plot(self, 
-    #             window=[True,False],
-    #             each=[False,False],
-    #             subtracted=False,
-    #             savefig_loc=None):
-    #     '''
-    #     Plot Power Spectrum and
-    #     Compare with analytic result
-    #     '''
-        
-    #     wd = np.sin(np.pi * self.time / self.T)**8 * (128/35)
-    #     wd = wd[:, None]
-        
-    #     if window[0]:    
-    #         pos_wd = self.sim.pos_arr * wd
-    #     if window[1]:
-    #         acc_wd = self.sim.acc_arr * wd
-
-
-    #     fig, ax = plt.subplots(ncols=2, figsize=(9,4))
-
-    #     fig.tight_layout()
-    #     if savefig_loc:
-    #         fig.savefig(savefig_loc)
-
-    #     return fig
